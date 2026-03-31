@@ -1,74 +1,41 @@
-# Canton Multi-Signature Wallet
+# Canton Multisig Wallet
 
-This repository contains a multi-signature (multisig) wallet implementation built on the Canton Network using Daml smart contracts. It provides a secure and auditable way to manage shared digital assets or execute critical operations, requiring a predefined number of approvals before any action is taken.
+This project implements a multi-signature (multisig) wallet on the Canton network using Daml smart contracts. It allows a group of parties to collectively manage a digital treasury or account, requiring a predefined number of approvals before any transaction can be executed.
 
-## Project Overview
+## Overview
 
-The `canton-multisig-wallet` project allows for the creation of shared accounts where transactions or operations must be approved by a threshold number of designated parties (signatories) before they can be finalized. This is ideal for decentralized autonomous organizations (DAOs), corporate treasuries, joint ventures, or any scenario demanding collaborative control and enhanced security.
+A multisig wallet enhances security by distributing control over funds. Instead of a single private key controlling the assets, multiple keys are required to authorize a transaction. This significantly reduces the risk of unauthorized access due to a single key compromise.
 
-### Key Features
+This implementation on Canton leverages the network's privacy and interoperability features to provide a secure and auditable multisig solution. Key features include:
 
-*   **M-of-N Multisig:** Configure a wallet to require `M` approvals out of `N` potential signatories for any proposed action.
-*   **Proposal System:** Any signatory can propose a transaction (e.g., "send funds to X", "change a parameter Y").
-*   **Approval Mechanism:** Other signatories can review and approve proposed transactions.
-*   **Automated Execution:** Once the required `M` approvals are met, the proposed action is automatically executed on the Canton ledger.
-*   **Auditability:** All proposals, approvals, and executions are recorded as immutable Daml contracts on the ledger, providing a clear audit trail.
-*   **Extensible Operations:** Designed to be flexible, allowing for various types of "payloads" or operations to be proposed and executed, not just asset transfers.
+*   **m-of-n Approval:**  The wallet requires `m` signatures out of a total of `n` possible signatories to authorize a transaction. This threshold is configurable at wallet creation.
+*   **Transaction Proposals:**  Any signatory can propose a transaction, specifying the recipient and amount.
+*   **Co-signing:** Other signatories can review the proposed transaction and co-sign it.
+*   **Execution:** Once the required number of signatures (`m`) is reached, the transaction is automatically executed.
+*   **Auditability:** All transaction proposals, signatures, and executions are recorded on the Canton ledger, providing a transparent and auditable history.
+*   **Daml Smart Contracts:** Implemented using Daml, ensuring correctness and security through formal verification.
 
-### Use Cases
+## Use Cases
 
-*   **DAO Treasuries:** Manage community funds with collective governance.
-*   **Corporate Bank Accounts:** Require multiple director approvals for large expenditures.
-*   **Joint Ventures:** Shared control over project finances or key decisions.
-*   **Escrow Services:** Release funds only upon mutual agreement of involved parties.
-*   **System Administration:** Securely enact critical configuration changes requiring team consensus.
+This multisig wallet can be used in various scenarios:
 
-## Technologies Used
+*   **DAO Treasuries:**  Decentralized Autonomous Organizations (DAOs) can use multisig wallets to manage their funds securely, requiring a quorum of members to approve spending.
+*   **Corporate Accounts:**  Companies can use multisig wallets for corporate accounts, requiring multiple executives to authorize large transactions.
+*   **Escrow Services:**  Multisig wallets can be used in escrow scenarios, where funds are held until certain conditions are met, requiring both the buyer and seller to approve the release of funds.
+*   **Custodial Services:**  Securely manage digital assets requiring multiple levels of authorization.
 
-*   **Canton Network:** A privacy-preserving distributed ledger for inter-company workflows.
-*   **Daml:** The smart contract language used to define the ledger logic, ensuring strong types, authorization, and atomic transactions.
+## Contracts
+
+The core contracts that govern the multisig wallet are:
+
+*   `MultisigWallet`: Represents the multisig wallet itself, defining the signatories, required approvals, and current balance.
+*   `TransactionProposal`: Represents a proposed transaction, including the recipient, amount, and signatures received.
+*   `SignatoryRole`: Establishes the right of a party to act as a signatory to the MultisigWallet.
 
 ## Getting Started
 
-To run and test this project, you will need the Daml SDK installed.
-
-### Prerequisites
-
-*   **Daml SDK (version 3.1.0 or newer):** Follow the installation instructions at [daml.com/get-started](https://www.daml.com/get-started/).
-
-### Build the Project
-
-Navigate to the project root directory and run:
-
-```bash
-daml build
-```
-
-This will compile the Daml contracts into a `.dar` file, which is the deployable artifact for Canton.
-
-### Run Tests
-
-The project includes Daml Script tests to verify the contract logic.
-
-```bash
-daml test
-```
-
-This command executes the predefined test scenarios, ensuring the multisig logic (proposal, approval, execution) behaves as expected.
-
-## Project Structure
-
-*   `daml/`: Contains the Daml smart contract source files.
-    *   `Multisig.daml`: Defines the core multisig wallet template, proposal, and approval mechanisms.
-    *   `Payload.daml`: Defines example payload types that the multisig wallet can execute (e.g., simple transfer).
-*   `daml.yaml`: Project configuration file for Daml, specifying SDK version, dependencies, and project metadata.
-*   `README.md`: This file.
-*   `.gitignore`: Specifies files and directories to be ignored by Git.
+See the `docs/` directory for more detailed documentation, including setup instructions and example usage.
 
 ## Contributing
 
-Contributions are welcome! If you find a bug or have a feature request, please open an issue.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details (Note: A `LICENSE` file would typically be added to a real project).
+Contributions are welcome! Please submit pull requests with bug fixes, new features, or improvements to the documentation.

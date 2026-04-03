@@ -1,41 +1,99 @@
-# Canton Multisig Wallet
+# Canton Multi-Signature Wallet
 
-This project implements a multi-signature (multisig) wallet on the Canton network using Daml smart contracts. It allows a group of parties to collectively manage a digital treasury or account, requiring a predefined number of approvals before any transaction can be executed.
+This project provides a Daml implementation of an m-of-n multi-signature wallet on the Canton Network. It allows a group of parties to collectively manage assets, where any transaction requires approval from a minimum number of members (`m`) out of the total `n` members.
 
-## Overview
+This pattern is essential for applications like:
+- DAO (Decentralized Autonomous Organization) treasuries
+- Corporate expense accounts
+- Joint savings accounts
+- Escrow services
 
-A multisig wallet enhances security by distributing control over funds. Instead of a single private key controlling the assets, multiple keys are required to authorize a transaction. This significantly reduces the risk of unauthorized access due to a single key compromise.
+## Why Canton and Daml?
 
-This implementation on Canton leverages the network's privacy and interoperability features to provide a secure and auditable multisig solution. Key features include:
+Daml provides a robust framework for modeling multi-party workflows with built-in authorization and privacy. Canton, as a privacy-enabled distributed ledger platform, ensures that wallet details and transactions are only visible to the involved parties, a critical feature for enterprise and institutional use cases.
 
-*   **m-of-n Approval:**  The wallet requires `m` signatures out of a total of `n` possible signatories to authorize a transaction. This threshold is configurable at wallet creation.
-*   **Transaction Proposals:**  Any signatory can propose a transaction, specifying the recipient and amount.
-*   **Co-signing:** Other signatories can review the proposed transaction and co-sign it.
-*   **Execution:** Once the required number of signatures (`m`) is reached, the transaction is automatically executed.
-*   **Auditability:** All transaction proposals, signatures, and executions are recorded on the Canton ledger, providing a transparent and auditable history.
-*   **Daml Smart Contracts:** Implemented using Daml, ensuring correctness and security through formal verification.
+- **Privacy by Default:** Canton ensures that only the signatories of a specific wallet can see its state and pending proposals. Unrelated parties on the network have no visibility.
+- **Verifiable Execution:** Daml's smart contract logic guarantees that transactions are only executed when the pre-defined signature threshold is met. The rules are code and are enforced by the ledger.
+- **Clear Authorization:** The `signatory` and `controller` keywords in Daml make it explicit who can create wallets, propose transactions, and approve them.
+- **Interoperability:** Canton's design allows multi-sig wallets to interoperate across different domains and blockchains, enabling complex cross-chain treasury management.
 
-## Use Cases
+## Core Concepts
 
-This multisig wallet can be used in various scenarios:
+The workflow is designed around two primary Daml templates:
 
-*   **DAO Treasuries:**  Decentralized Autonomous Organizations (DAOs) can use multisig wallets to manage their funds securely, requiring a quorum of members to approve spending.
-*   **Corporate Accounts:**  Companies can use multisig wallets for corporate accounts, requiring multiple executives to authorize large transactions.
-*   **Escrow Services:**  Multisig wallets can be used in escrow scenarios, where funds are held until certain conditions are met, requiring both the buyer and seller to approve the release of funds.
-*   **Custodial Services:**  Securely manage digital assets requiring multiple levels of authorization.
+1.  **`Wallet`**: This is the main contract representing the shared account.
+    -   It holds the list of `signatories` (`n` parties).
+    -   It defines the `minSigs` required for any transaction (`m`).
+    -   It acts as the authority for creating new transaction proposals.
 
-## Contracts
+2.  **`TransactionProposal`**: This contract represents a pending transaction that has been proposed but not yet fully approved.
+    -   It contains the `payload` of the transaction (e.g., transfer details).
+    -   It tracks the parties who have already `cosigned` the proposal.
+    -   Once `minSigs` is reached, the transaction can be executed.
 
-The core contracts that govern the multisig wallet are:
+## Workflow
 
-*   `MultisigWallet`: Represents the multisig wallet itself, defining the signatories, required approvals, and current balance.
-*   `TransactionProposal`: Represents a proposed transaction, including the recipient, amount, and signatures received.
-*   `SignatoryRole`: Establishes the right of a party to act as a signatory to the MultisigWallet.
+The typical lifecycle of a multi-sig transaction is as follows:
 
-## Getting Started
+1.  **Wallet Creation**: A group of parties (e.g., Alice, Bob, and Charlie) agree to create a shared wallet. One party creates the `Wallet` contract, specifying all `signatories` and the signature threshold (e.g., 2-of-3). All other parties are signatories on this contract.
 
-See the `docs/` directory for more detailed documentation, including setup instructions and example usage.
+2.  **Transaction Proposal**: Any signatory (e.g., Alice) can propose a transaction by exercising the `ProposeTransaction` choice on the `Wallet` contract. This creates a `TransactionProposal` contract, with Alice as the first signatory.
 
-## Contributing
+3.  **Co-signing**: The other signatories (Bob and Charlie) are observers on the `TransactionProposal`. They can review the transaction details and, if they agree, exercise the `Cosign` choice to add their signature.
 
-Contributions are welcome! Please submit pull requests with bug fixes, new features, or improvements to the documentation.
+4.  **Execution**: When the number of co-signers reaches the `minSigs` threshold, the `Cosign` choice automatically triggers the final action. For example, if Bob is the second person to sign a 2-of-3 proposal, his `Cosign` action will not only add his signature but also execute the transaction payload.
+
+5.  **Cancellation**: The original proposer can cancel the `TransactionProposal` at any time before it is fully signed and executed by exercising the `CancelProposal` choice.
+
+## How to Get Started
+
+### Prerequisites
+
+-   [Daml SDK v3.1.0](https://docs.daml.com/getting-started/installation)
+-   A running Canton environment. A minimal configuration is provided in `canton/canton.conf`.
+
+### Build the Project
+
+Compile the Daml code and create a distributable `.dar` file:
+
+```bash
+daml build
+```
+
+### Run Tests
+
+Execute the test scenarios defined in `daml/Test.daml`:
+
+```bash
+daml test
+```
+
+### Run on Canton
+
+1.  **Start the Canton Ledger:**
+    Open a terminal and run the Canton console from the project root.
+
+    ```bash
+    canton -c canton/canton.conf --bootstrap canton/bootstrap.canton
+    ```
+    This script will start a participant node, connect it to a mediator and domain, and allocate the necessary parties (`Operator`, `Alice`, `Bob`, `Charlie`).
+
+2.  **Deploy the DAR file:**
+    In the Canton console (`canton>`), deploy the compiled DAR file to the participant node (`p1`).
+
+    ```csharp
+    p1.dars.upload(r".daml/dist/canton-multisig-wallet-0.1.0.dar")
+    ```
+
+3.  **Run the Setup Script:**
+    In a new terminal, run the `Daml.Script` to initialize the contracts on the ledger. This will create a 2-of-3 wallet for Alice, Bob, and Charlie.
+
+    ```bash
+    daml script \
+      --dar .daml/dist/canton-multisig-wallet-0.1.0.dar \
+      --script-name Main:setup \
+      --ledger-host localhost \
+      --ledger-port 10011 # Default port for participant p1
+    ```
+
+You can now interact with the wallet by proposing and co-signing transactions via Daml Script or the JSON API.

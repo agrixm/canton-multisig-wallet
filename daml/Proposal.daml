@@ -1,0 +1,110 @@
+-- |
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+--
+
+module Proposal where
+
+import DA.Next.Set (Set)
+import qualified DA.Next.Set as Set
+import DA.Time (Time)
+import Wallet (Wallet)
+
+-- | Defines the types of actions that can be proposed and executed by the wallet.
+-- This is a generic representation of a transaction. The `Wallet` contract
+-- is responsible for interpreting and executing this action.
+data Action = Transfer
+  { assetSymbol : Text
+  , amount : Decimal
+  , recipient : Party
+  , description : Text
+  } deriving (Eq, Show, Ord)
+
+-- | Represents a transaction proposal awaiting approval from the wallet's signatories.
+-- Once the number of `approvers` reaches the `threshold` defined in the parent
+-- `Wallet` contract, the transaction can be executed.
+template TransactionProposal
+  with
+    walletCid : ContractId Wallet
+    -- ^ The `ContractId` of the parent wallet this proposal belongs to.
+
+    walletSignatories: Set Party
+    -- ^ A copy of the signatories from the parent wallet at the time of proposal.
+    -- This ensures that only these parties can sign this specific proposal.
+
+    proposalId : Text
+    -- ^ A unique identifier for the proposal, provided by the proposer.
+
+    proposer : Party
+    -- ^ The signatory who created this proposal.
+
+    proposedAction : Action
+    -- ^ The transaction details to be executed upon successful approval.
+
+    approvers : Set Party
+    -- ^ The set of signatories who have approved this proposal.
+
+    createdAt : Time
+    -- ^ The timestamp of when the proposal was created.
+
+  where
+    signatory walletSignatories
+
+    observer Set.toList approvers
+
+    key (walletCid, proposalId) : (ContractId Wallet, Text)
+    maintainer Set.toList walletSignatories
+
+    ensure
+      -- The proposer must be a valid signatory of the wallet.
+      Set.member proposer walletSignatories &&
+      -- Upon creation, the approvers set must contain only the proposer.
+      approvers == Set.singleton proposer
+
+    -- | A wallet signatory can approve the transaction proposal.
+    -- If this approval meets the required threshold, the choice triggers the
+    -- execution of the transaction on the parent `Wallet` contract.
+    choice Approve : ContractId Wallet
+      with
+        approver : Party
+        -- ^ The party (who must be a wallet signatory) approving the proposal.
+      controller approver
+      do
+        -- Ensure the controller is a valid signatory for this wallet.
+        assertMsg "Approver must be one of the wallet signatories" $
+          Set.member approver walletSignatories
+
+        -- A signatory cannot approve a proposal more than once.
+        assertMsg "Party has already approved this proposal" $
+          not $ Set.member approver approvers
+
+        -- Fetch the parent wallet to check its current state and threshold.
+        wallet <- fetch walletCid
+
+        let newApprovers = Set.insert approver approvers
+        let approvalCount = Set.size newApprovers
+
+        if approvalCount >= wallet.threshold
+        then do
+          -- Threshold met: Archive this proposal and exercise the execution
+          -- choice on the wallet contract. The wallet is responsible for the
+          -- actual execution logic.
+          archive self
+          exercise walletCid ExecuteTransaction with
+              actionToExecute = proposedAction,
+              finalApprovers = newApprovers
+
+        else do
+          -- Threshold not yet met: Recreate the proposal with the new approver added.
+          -- We return the ContractId of the original wallet, as it has not been consumed.
+          create this with approvers = newApprovers
+          return walletCid
+
+    -- | The original proposer can cancel their proposal as long as it has not
+    -- been fully approved and executed.
+    choice Cancel : ()
+      controller proposer
+      do
+        -- Check that the proposal is still active (i.e., this contract hasn't been archived).
+        -- The controller check ensures only the proposer can cancel.
+        archive self

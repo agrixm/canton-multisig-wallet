@@ -1,0 +1,44 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Approval where
+
+import Proposal (Proposal)
+import Wallet (Wallet)
+
+-- | Represents a single signatory's approval of a given transaction proposal.
+-- This contract is created by a signatory to signal their consent. The existence
+-- of this contract serves as an on-ledger, cryptographic signature for the
+-- associated proposal.
+template Approval
+  with
+    approver : Party
+      -- ^ The signatory who is providing the approval.
+
+    proposalCid : ContractId Proposal
+      -- ^ The specific proposal being approved.
+
+  where
+    signatory approver
+
+    let
+      proposal = fetch proposalCid
+      wallet = fetch proposal.walletCid
+    in do
+      -- The original proposer of the transaction needs to see the approvals
+      -- to know when to attempt execution.
+      observer proposal.proposer
+
+      -- All other signatories of the wallet should also see the approvals
+      -- to track the progress towards the required threshold.
+      observer wallet.signatories
+
+    -- A party can only approve a specific proposal once. This key ensures
+    -- that a party cannot create multiple Approval contracts for the same proposal.
+    key (approver, proposalCid) : (Party, ContractId Proposal)
+    maintainer key._1
+
+    -- CRITICAL: This ensures that only a valid signatory of the associated
+    -- wallet can create an approval. It prevents unauthorized parties from
+    -- influencing the transaction's execution.
+    ensure (approver `elem` wallet.signatories)

@@ -1,0 +1,206 @@
+module Wallet where
+
+import DA.Set (Set)
+import qualified DA.Set as Set
+import DA.Time (Time, getTime)
+import DA.Text (Text)
+
+-- | Represents a multi-signature wallet.
+-- This is the main contract holding the state of the shared funds.
+template Wallet
+  with
+    owner: Party
+      -- ^ The logical owner or creator of the wallet (e.g., a DAO).
+    signatories: Set Party
+      -- ^ The set of parties authorized to approve transactions.
+    threshold: Int
+      -- ^ The minimum number of signatories required to approve a transaction (m-of-n).
+    walletId: Text
+      -- ^ A unique identifier for this wallet, scoped to the owner.
+    balance: Decimal
+      -- ^ The current balance of the wallet.
+  where
+    signatory signatories
+
+    observer owner
+
+    key (owner, walletId) : (Party, Text)
+    maintainer Set.toList signatories
+
+    ensure
+      threshold > 0 &&
+      threshold <= Set.size signatories &&
+      balance >= 0.0 &&
+      not (Set.null signatories)
+
+    -- | A signatory proposes a new transaction to be approved.
+    choice Propose_Transaction : ContractId TransactionProposal
+      with
+        proposer: Party
+          -- ^ The signatory making the proposal.
+        recipient: Party
+          -- ^ The party to receive the funds.
+        amount: Decimal
+          -- ^ The amount to be transferred.
+        reference: Text
+          -- ^ A description or reference for the transaction.
+      controller proposer
+      do
+        assert (proposer `Set.member` signatories)
+        assert (amount > 0.0)
+        assert (recipient /= proposer) -- Basic self-payment check
+
+        create TransactionProposal with
+          walletCid = self
+          walletOwner = owner
+          proposer
+          recipient
+          amount
+          reference
+          coSigners = Set.singleton proposer
+          signatories
+          threshold
+
+    -- | Internal choice to update the wallet's balance after a transaction is executed.
+    -- This choice is exercised by an `ApprovedTransaction` contract.
+    choice Internal_Update_Balance : ContractId Wallet
+      with
+        approvers: Set Party
+          -- ^ The set of parties who approved the transaction.
+        deduction: Decimal
+          -- ^ The amount to deduct from the balance.
+      controller approvers
+      do
+        -- Ensure the controllers are a valid subset of signatories who meet the threshold
+        assert (Set.isSubsetOf approvers signatories)
+        assert (Set.size approvers >= threshold)
+
+        let newBalance = balance - deduction
+        assertMsg "Insufficient funds in wallet to complete the transaction." (newBalance >= 0.0)
+
+        create this with
+          balance = newBalance
+
+-- | Represents a transaction proposal that is awaiting co-signatures.
+template TransactionProposal
+  with
+    walletCid: ContractId Wallet
+      -- ^ The wallet this proposal is for.
+    walletOwner: Party
+      -- ^ The owner of the wallet.
+    proposer: Party
+      -- ^ The signatory who created this proposal.
+    recipient: Party
+      -- ^ The intended recipient of the funds.
+    amount: Decimal
+      -- ^ The amount to be transferred.
+    reference: Text
+      -- ^ A description or reference for the transaction.
+    coSigners: Set Party
+      -- ^ The set of signatories who have already approved this proposal.
+    signatories: Set Party
+      -- ^ The full set of signatories for the wallet.
+    threshold: Int
+      -- ^ The required number of signatures for approval.
+  where
+    signatory signatories
+    observer walletOwner, recipient
+
+    ensure
+      proposer `Set.member` signatories &&
+      Set.isSubsetOf coSigners signatories &&
+      Set.size coSigners < threshold &&
+      amount > 0.0
+
+    -- | A signatory co-signs the transaction proposal. This is a consuming choice that
+    -- transitions the state to either a new proposal with an additional signature,
+    -- or to an approved transaction if the threshold is met.
+    choice Co_Sign : Either (ContractId TransactionProposal) (ContractId ApprovedTransaction)
+      with
+        coSigner: Party
+          -- ^ The party co-signing the proposal.
+      controller coSigner
+      do
+        -- The controller must be a signatory and not have signed already.
+        assertMsg "Controller must be a signatory of the wallet." (coSigner `Set.member` signatories)
+        assertMsg "This party has already signed this proposal." (not $ coSigner `Set.member` coSigners)
+
+        let newCoSigners = Set.insert coSigner coSigners
+        let numSignatures = Set.size newCoSigners
+
+        if numSignatures < threshold
+          then do
+            -- Threshold not yet met. Archive this proposal and create a new one with the
+            -- updated co-signer set. Return its ContractId wrapped in `Left`.
+            proposalCid <- create this with coSigners = newCoSigners
+            return $ Left proposalCid
+          else do
+            -- Threshold met. Archive this proposal and create an `ApprovedTransaction` contract.
+            -- Return its ContractId wrapped in `Right`.
+            approvedCid <- create ApprovedTransaction with
+              walletCid
+              walletOwner
+              approvers = newCoSigners
+              recipient
+              amount
+              reference
+            return $ Right approvedCid
+
+-- | Represents a transaction that has gathered enough signatures and is ready for execution.
+template ApprovedTransaction
+  with
+    walletCid: ContractId Wallet
+      -- ^ The wallet contract to be updated.
+    walletOwner: Party
+      -- ^ The owner of the wallet.
+    approvers: Set Party
+      -- ^ The set of signatories who approved this transaction.
+    recipient: Party
+      -- ^ The party who will receive the funds.
+    amount: Decimal
+      -- ^ The amount to be transferred.
+    reference: Text
+      -- ^ A description or reference for the transaction.
+  where
+    signatory approvers
+    observer walletOwner, recipient
+
+    -- | The recipient executes the transaction to claim the funds.
+    choice Execute : ContractId ExecutedTransaction
+      controller recipient
+      do
+        -- Fetch the wallet to check its current balance
+        wallet <- fetch walletCid
+        assert (wallet.balance >= amount)
+
+        -- Update the wallet's balance by exercising the internal choice
+        exercise walletCid Internal_Update_Balance with
+          approvers
+          deduction = amount
+
+        -- Create a historical record of the execution
+        now <- getTime
+        create ExecutedTransaction with
+          walletId = wallet.walletId
+          walletOwner
+          executor = recipient
+          approvers
+          recipient
+          amount
+          reference
+          executionTime = now
+
+-- | A historical record of a successfully executed transaction. This is an archival contract.
+template ExecutedTransaction
+  with
+    walletId: Text
+    walletOwner: Party
+    executor: Party
+    approvers: Set Party
+    recipient: Party
+    amount: Decimal
+    reference: Text
+    executionTime: Time
+  where
+    signatory executor, walletOwner
+    observer (Set.toList approvers)

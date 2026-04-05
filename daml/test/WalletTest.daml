@@ -1,0 +1,202 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module WalletTest where
+
+import Daml.Script
+import DA.Assert
+import DA.List (elem)
+
+import Wallet
+import Proposal
+import Approval
+
+-- | Main test suite for the multi-signature wallet.
+runWalletTests : Script ()
+runWalletTests = script do
+  -- Allocate parties for all tests
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+  dave <- allocateParty "Dave"
+  erin <- allocateParty "Erin"
+  outsider <- allocateParty "Outsider"
+
+  -- Test Scenario 1: Successful 2-of-3 transaction
+  test "2-of-3 wallet successful transaction" do
+    let
+      signatories = [alice, bob, charlie]
+      threshold = 2
+
+    -- Alice creates the wallet
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    -- Alice proposes a transaction
+    proposalCid <- submit alice do
+      exercise walletCid ProposeTransaction with
+        description = "Pay Q1 supplier invoices"
+
+    -- Bob approves the transaction (1st approval)
+    approval1Cid <- submit bob do
+      exercise proposalCid Approve
+
+    -- Query to ensure one approval exists and transaction is not yet executed
+    approvals1 <- query @Approval bob
+    assertEq (length approvals1) 1
+    executedTxs1 <- query @ExecutedTransaction alice
+    assertEq (length executedTxs1) 0
+
+    -- Charlie approves the transaction (2nd approval, meets threshold)
+    executedTxCid <- submit charlie do
+      exercise proposalCid Approve
+
+    -- Assertions after meeting the threshold
+    -- Proposal should be archived
+    proposalAfter <- query @TransactionProposal alice
+    assertEq (length proposalAfter) 0 "Proposal should be archived"
+
+    -- All approvals should be archived
+    approvalsAfter <- query @Approval alice
+    assertEq (length approvalsAfter) 0 "Approvals should be archived"
+
+    -- An executed transaction contract should exist
+    executedTxsAfter <- query @ExecutedTransaction alice
+    assertEq (length executedTxsAfter) 1 "ExecutedTransaction should be created"
+
+    -- Verify the details of the executed transaction
+    executedTx <- fetch (head executedTxsAfter)
+    assertEq executedTx.walletCid walletCid
+    assertEq executedTx.description "Pay Q1 supplier invoices"
+    -- The approvers list should contain Bob and Charlie. Order isn't guaranteed.
+    assert (bob `elem` executedTx.approvers)
+    assert (charlie `elem` executedTx.approvers)
+    assertEq (length executedTx.approvers) 2
+
+  -- Test Scenario 2: Successful 3-of-5 transaction
+  test "3-of-5 wallet successful transaction" do
+    let
+      signatories = [alice, bob, charlie, dave, erin]
+      threshold = 3
+
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    proposalCid <- submit bob do
+      exercise walletCid ProposeTransaction with
+        description = "Acquire new office space"
+
+    -- 1st Approval
+    _ <- submit charlie do exercise proposalCid Approve
+
+    -- 2nd Approval
+    _ <- submit dave do exercise proposalCid Approve
+
+    -- Assert state before final approval
+    query @ExecutedTransaction alice >>= \txs -> assertEq (length txs) 0
+
+    -- 3rd Approval (meets threshold)
+    _ <- submit erin do exercise proposalCid Approve
+
+    -- Assert execution
+    query @ExecutedTransaction alice >>= \txs -> assertEq (length txs) 1
+    query @TransactionProposal alice >>= \props -> assertEq (length props) 0
+
+
+  -- Test Scenario 3: Transaction rejection
+  test "Transaction is archived upon rejection" do
+    let
+      signatories = [alice, bob, charlie]
+      threshold = 2
+
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    proposalCid <- submit alice do
+      exercise walletCid ProposeTransaction with
+        description = "Update company logo"
+
+    -- Bob rejects the proposal
+    submit bob do
+      exercise proposalCid Reject
+
+    -- Assert that the proposal is archived
+    proposalAfter <- query @TransactionProposal alice
+    assertEq (length proposalAfter) 0 "Proposal should be archived after rejection"
+
+    -- Assert that no approvals or executed transactions were created
+    query @Approval alice >>= \approvals -> assertEq (length approvals) 0
+    query @ExecutedTransaction alice >>= \txs -> assertEq (length txs) 0
+
+
+  -- Test Scenario 4: Non-signatory cannot propose
+  test "Non-signatory proposal fails" do
+    let
+      signatories = [alice, bob]
+      threshold = 2
+
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    -- Outsider tries to propose, which should fail
+    submitMustFail outsider do
+      exercise walletCid ProposeTransaction with
+        description = "Unauthorized transfer"
+
+
+  -- Test Scenario 5: Non-signatory cannot approve
+  test "Non-signatory approval fails" do
+    let
+      signatories = [alice, bob, charlie]
+      threshold = 2
+
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    proposalCid <- submit alice do
+      exercise walletCid ProposeTransaction with
+        description = "A valid proposal"
+
+    -- Outsider tries to approve, which should fail
+    submitMustFail outsider do
+      exercise proposalCid Approve
+
+
+  -- Test Scenario 6: Signatory cannot approve their own proposal
+  test "Proposer cannot self-approve" do
+    let
+      signatories = [alice, bob]
+      threshold = 2
+
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    proposalCid <- submit alice do
+      exercise walletCid ProposeTransaction with
+        description = "Move funds to savings"
+
+    -- Alice, the proposer, tries to approve her own proposal
+    submitMustFail alice do
+      exercise proposalCid Approve
+
+
+  -- Test Scenario 7: Signatory cannot approve the same proposal twice
+  test "Duplicate approval fails" do
+    let
+      signatories = [alice, bob, charlie]
+      threshold = 3
+
+    walletCid <- submit alice do
+      create Wallet with operator = alice, signatories, threshold
+
+    proposalCid <- submit alice do
+      exercise walletCid ProposeTransaction with
+        description = "Invest in R&D"
+
+    -- Bob approves for the first time
+    _ <- submit bob do
+      exercise proposalCid Approve
+
+    -- Bob tries to approve again, which should fail
+    submitMustFail bob do
+      exercise proposalCid Approve
